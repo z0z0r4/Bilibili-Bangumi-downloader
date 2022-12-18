@@ -76,6 +76,7 @@ async def init() -> Credential:
             print("登录成功！")
         else:
             credential = c
+            
     elif config["login_mode"] == "PhoneNumber":
         # 验证码登录
         phone = config["phone_number"]
