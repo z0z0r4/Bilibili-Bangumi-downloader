@@ -1,15 +1,15 @@
 import asyncio
 import subprocess
-from bilibili_api import video, parse_link, Credential, HEADERS, bangumi, login, user, sync, settings
-from bilibili_api.login import login_with_password, login_with_sms, send_sms, PhoneNumber, Check
-from bilibili_api.user import get_self_info
 import aiohttp
 import os
 import json
+from bilibili_api import parse_link, Credential, HEADERS, bangumi, login, user, sync
+from bilibili_api.login import login_with_password, login_with_sms, send_sms, PhoneNumber, Check
+from bilibili_api.user import get_self_info
 
-asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# bilibili_api Docs: https://nemo2011.github.io/bilibili-api
 
-FFMPEG_PATH = "ffmpeg"
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) # TODO 防报错
 
 async def init() -> Credential:
     # 初始化
@@ -31,17 +31,18 @@ async def init() -> Credential:
         config = json.load(config)
     
     # FFMPEG 路径
-    global FFMPEG_PATH
-    if "FFmpeg_Path" in config:
-        FFMPEG_PATH = config["FFmpeg_Path"]
+    FFMPEG_PATH = config["FFmpeg_Path"]
     with open(os.devnull, 'wb') as devnull:
         cmd = subprocess.run(args=[FFMPEG_PATH, "-version"], stdout=devnull, stderr=devnull)
         if cmd.returncode == 0:
             print(f"FFmpeg 路径：{FFMPEG_PATH} 可用")
         else:
             print("FFmpeg 路径错误 !请在config.json中修改FFmpeg_Path")
-            exit(1)
+            os.system('pause')
 
+
+
+    # TODO 感觉臃肿...
     if config["login_mode"] == "Cookie":
         SESSDATA = config["SESSDATA"]
         BILI_JCT = config["BILI_JCT"]
@@ -57,10 +58,14 @@ async def init() -> Credential:
             credential.raise_for_no_sessdata() # 判断是否成功
         except:
             print("登录失败...")
-            exit()
+            os.system('pause')
 
     elif config["login_mode"] == "Password":
         # 密码登录
+        if config["username"] == "" or config["password"] == "":
+            print("请在config.json中填写用户名和密码")
+            os.system('pause')
+
         username = config["username"]
         password = config["password"]
         print("正在登录。")
@@ -76,10 +81,13 @@ async def init() -> Credential:
             print("登录成功！")
         else:
             credential = c
-            
     elif config["login_mode"] == "PhoneNumber":
         # 验证码登录
         phone = config["phone_number"]
+        if phone == "":
+            print("请在config.json中填写手机号码")
+            os.system('pause')
+
         print("正在登录。")
         send_sms(PhoneNumber(phone, country="+86")) # 默认设置地区为中国大陆
         code = input("请输入验证码：")
@@ -91,6 +99,7 @@ async def init() -> Credential:
         print(f"欢迎，{(await get_self_info(credential))['name']}!")
         cookies = credential.get_cookies()
 
+        # 自动存入 config.json
         config["SESSDATA"] = cookies["SESSDATA"]
         config["BUVID3"] = cookies["buvid3"]
         config["BILI_JCT"] = cookies["bili_jct"]
@@ -101,10 +110,10 @@ async def init() -> Credential:
         user_info = await user.get_self_info(credential=credential)
         if user_info["vip"]["status"] == 0:
             print(f'请注意 {user_info["name"]} 不是大会员，可能受到B站限制')
-        return credential
+        return credential, FFMPEG_PATH
     else:
         print("Credential 无效 !")
-        exit(1)
+        os.system('pause')
 
 async def get_video(epid, b: bangumi.Bangumi):
     # 继承 banguim
@@ -114,23 +123,22 @@ async def get_video(epid, b: bangumi.Bangumi):
 
     # 实例化 Episode 类
     e = bangumi.Episode(epid=epid, credential=credential)
-    
-    # user_info = await user.get_self_info(credential=credential)
 
     # 获取信息
-    ep_info = await e.get_episode_info()
-    pages = await e.get_pages()
+    # ep_info = await e.get_episode_info()
+    # pages = await e.get_pages()
     url = await e.get_download_url()
 
+    # TODO 更好的分辨率选择
     if url["type"] == "DASH":
         # 视频轨链接
         video_url = ()
         for video_P in url['dash']['video']:
             if video_P['width'] == 1920 and video_P['height'] == 1080:
                 if video_url == ():
-                    video_url = video_P['baseUrl'], video_P['bandwidth']
-                elif video_P['bandwidth'] > video_url[1]:
-                    video_url = video_P['baseUrl'], video_P['bandwidth']
+                    video_url = video_P['baseUrl'], video_P['size']
+                elif video_P['size'] > video_url[1]:
+                    video_url = video_P['baseUrl'], video_P['size']
         if video_url == (): # 如果没有 1080P
             video_url = url["dash"]["video"][0]['baseUrl']
         else:
@@ -141,16 +149,15 @@ async def get_video(epid, b: bangumi.Bangumi):
         for audio_P in url['dash']['audio']:
             # if video_P['width'] == 1920 and video_P['height'] == 1080:
             if len(audio_url) == 0:
-                audio_url = audio_P['baseUrl'], audio_P['bandwidth']
-            elif audio_P['bandwidth'] > audio_url[1]:
-                audio_url = audio_P['baseUrl'], audio_P['bandwidth']
+                audio_url = audio_P['baseUrl'], audio_P['size']
+            elif audio_P['size'] > audio_url[1]:
+                audio_url = audio_P['baseUrl'], audio_P['size']
         if len(audio_url) == 0: # 如果没有 1080P
             audio_url = url["dash"]["audio"][0]['baseUrl']
         else:
             audio_url = audio_url[0]
         audio_url = url["dash"]["audio"][0]['baseUrl']
-
-        is_flv = True
+        is_flv = False
     
     else: # 可能为FLV
         video_size = 0
@@ -165,60 +172,68 @@ async def get_video(epid, b: bangumi.Bangumi):
     # 查找分P标题
     for ep in bangumi_info["episodes"]:
         if ep["id"] == epid:
-            ep_title = ep["share_copy"]
-            No = ep["title"]
+            # ep_title = ep["share_copy"]
+            ep_title = ep["title"]
             break
     
     if not os.path.exists(os.path.join("cache", banguim_title)):
         os.makedirs(os.path.join("cache", banguim_title))
     save_path = os.path.join("cache", banguim_title)
-    final_video_save_path = os.path.join(save_path, f"{No}_{epid}.mp4")
+    final_video_save_path = os.path.join(save_path, f"{ep_title}_{epid}.mp4")
 
     if os.path.exists(final_video_save_path):
-        print(f"已存在：{final_video_save_path}")
-        await asyncio.sleep(1)
+        print(f"已存在：{final_video_save_path}") # TODO 需要检查视频文件是否完整
+        await asyncio.sleep(1) # 防止被B站封IP
         return 0
 
     if is_flv:
-        video_save_path = os.path.join(save_path, f"{No}_{epid}_video_temp.flv")
+        video_save_path = os.path.join(save_path, f"{ep_title}_{epid}_video_temp.flv")
 
+    # TODO 赶工，try部分需要优化
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(600)) as sess:
         try:
             # 下载视频流
-            video_save_path = os.path.join(save_path, f"{No}_{epid}_video_temp.m4s")
+            video_save_path = os.path.join(save_path, f"{ep_title}_{epid}_video_temp.m4s")
             async with sess.get(video_url, headers=HEADERS) as resp:
                 length = resp.headers.get('content-length')
-                with open(os.path.join(save_path, f'{No}_{epid}_video_temp.m4s'), 'wb') as f:
+                with open(os.path.join(save_path, f'{ep_title}_{epid}_video_temp.m4s'), 'wb') as f:
                     process = 0
                     async for chunk in resp.content.iter_chunked(1024):
                         f.write(chunk)
                         process += len(chunk)
-            print(f'下载视频流 {No}_{epid}_video_temp.m4s 完成')
+            print(f'下载视频流 {ep_title}_{epid}_video_temp.m4s 完成')
         except asyncio.exceptions.TimeoutError:
-            print(f'下载视频流 {No}_{epid}_video_temp.m4s {video_url} 超时')
-            exit(1)
+            print(f'下载视频流 {ep_title}_{epid}_video_temp.m4s {video_url} 超时')
+            os.system('pause')
         except Exception as e:
             print(f"下载 {video_url} 错误")
 
-        if is_flv:
+        if is_flv == False:
             # 下载音频流
-            audio_save_path = os.path.join(save_path, f'{No}_{epid}_audio_temp.m4s')
+            audio_save_path = os.path.join(save_path, f'{ep_title}_{epid}_audio_temp.m4s')
             try:
                 async with sess.get(audio_url, headers=HEADERS) as resp:
                     length = resp.headers.get('content-length')
-                    with open(os.path.join(save_path, f'{No}_{epid}_audio_temp.m4s'), 'wb') as f:
+                    with open(os.path.join(save_path, f'{ep_title}_{epid}_audio_temp.m4s'), 'wb') as f:
                         process = 0
                         async for chunk in resp.content.iter_chunked(1024):
                             f.write(chunk)
                             process += len(chunk)
-                print(f'下载音频流 {No}_{epid}_audio_temp.m4s 完成')
+                print(f'下载音频流 {ep_title}_{epid}_audio_temp.m4s 完成')
             except asyncio.exceptions.TimeoutError:
-                print(f'下载视频流 {No}_{epid}_video_temp.m4s {video_url} 超时')
-                exit(1)
+                print(f'下载视频流 {ep_title}_{epid}_video_temp.m4s {video_url} 超时')
+                os.system('pause')
             except Exception as e:
                 print(f"下载 {audio_url} 错误")
     
+    # TODO 赶工，需要优化
     if is_flv:
+        with open(os.devnull, 'wb') as devnull:
+            subprocess.run(args=[FFMPEG_PATH, "-i", video_save_path, "-c", "copy", final_video_save_path], stdout=devnull, stderr=devnull)
+        # 删除临时文件
+        os.remove(video_save_path)
+        
+    else:
         # 混流
         # command = f'{FFMPEG_PATH} -i "{video_save_path}" -i "{audio_save_path}" -vcodec copy -acodec copy "{final_video_save_path}"'
         if os.path.exists(final_video_save_path):
@@ -228,22 +243,18 @@ async def get_video(epid, b: bangumi.Bangumi):
             # 删除临时文件
             os.remove(video_save_path)
             os.remove(audio_save_path)
-    else:
-        with open(os.devnull, 'wb') as devnull:
-            subprocess.run(args=[FFMPEG_PATH, "-i", video_save_path, "-c", "copy", final_video_save_path], stdout=devnull, stderr=devnull)
-        # 删除临时文件
-        os.remove(video_save_path)
 
     print(f'已下载：{final_video_save_path}')
 
 async def get_bangumi(media_id: int = None, url: str = None):
+    # TODO 已经不记得此处是否可以使用番剧 URL...
     if media_id is None and url is None:
         raise ValueError("需要 Media_id 或 番剧链接 中的一个 !")
     elif media_id is None:
         media_id = (await parse_link(url))[0].get_media_id()
     b = bangumi.Bangumi(media_id=media_id, credential=credential)
     
-    # 打印信息 Future https://nemo2011.github.io/bilibili-api/#/modules/bangumi?id=def-get_episode_info
+    # TODO | 修缮打印信息格式 Future https://nemo2011.github.io/bilibili-api/#/modules/bangumi?id=def-get_episode_info
     info = b.get_raw()
     if info[0]["message"] == "success":
         info = info[0]["result"]
@@ -270,7 +281,7 @@ async def get_bangumi(media_id: int = None, url: str = None):
             tasks = []
 
 async def param_medias(medias: list):
-    tasks = []
+    tasks = [] # TODO 需要修改并行下载...
     while len(medias) != 0:
         media_id = medias.pop(0)
         tasks.append(asyncio.create_task(get_bangumi(media_id=media_id)))
@@ -279,7 +290,7 @@ async def param_medias(medias: list):
             tasks = []
 
 if __name__ == '__main__':
-    credential = asyncio.run(init())
+    credential, FFMPEG_PATH = asyncio.run(init())
     if not os.path.exists("cache"):
         os.makedirs("cache")
     while True:
