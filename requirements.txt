@@ -1,2 +1,2 @@
 aiohttp==3.8.4
-bilibili-api-python==15.4.3
+bilibili-api-python==15.4.4
